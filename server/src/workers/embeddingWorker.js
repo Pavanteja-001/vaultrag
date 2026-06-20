@@ -35,7 +35,7 @@ const embedChunkWithRetry = async (chunk, commitHash, sourceType) => {
             status: 'active',
           },
         },
-        { upsert: true, new: true }
+        { upsert: true, returnDocument: 'after' }
       );
 
       return true;

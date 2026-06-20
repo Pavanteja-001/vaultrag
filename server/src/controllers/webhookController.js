@@ -47,6 +47,7 @@ const handleGithubWebhook = async (req, res) => {
 
   // Step 3: Respond 200 immediately — never block on processing
   res.status(200).json({ status: 'received' });
+  console.log(`📦 Webhook received — delivery: ${deliveryId}`);
 
   // Step 4: Process asynchronously
   setImmediate(async () => {
@@ -55,7 +56,10 @@ const handleGithubWebhook = async (req, res) => {
       const commits = payload.commits || [];
       const headCommit = payload.head_commit || commits[0];
 
-      if (!headCommit) return;
+      if (!headCommit) {
+        console.log('⚠️  Webhook: no head commit found — skipping');
+        return;
+      }
 
       const sha = headCommit.id;
       const message = headCommit.message;
@@ -67,6 +71,8 @@ const handleGithubWebhook = async (req, res) => {
       ];
       const mergedAt = new Date(headCommit.timestamp || Date.now());
 
+      console.log(`🔀 Commit: ${sha.slice(0, 7)} by ${authorGithubId} — "${message}" (${filesChanged.length} files)`);
+
       // Store commit record
       await Commit.findOneAndUpdate(
         { sha },
@@ -74,20 +80,21 @@ const handleGithubWebhook = async (req, res) => {
         { upsert: true }
       );
 
-      // Chunk changed files (using content from payload if available, or just file path)
+      // Chunk changed files
       const allChunks = [];
       for (const filepath of [...(headCommit.added || []), ...(headCommit.modified || [])]) {
-        // In a real scenario, you'd fetch file content from GitHub API.
-        // For webhook-based sync, we use the commit data we have.
-        // The filepath itself creates metadata entries for role-tagging.
         const content = `// File: ${filepath}\n// Commit: ${sha}\n// Author: ${authorGithubId}`;
         const chunks = chunkFile(filepath, content);
+        console.log(`  📄 ${filepath} → ${chunks.length} chunk(s)`);
         allChunks.push(...chunks);
       }
 
       if (allChunks.length > 0) {
+        console.log(`🧠 Embedding ${allChunks.length} chunk(s)...`);
         const result = await processChunks({ chunks: allChunks, commitHash: sha, sourceType: 'code' });
         console.log(`✅ Webhook processed: ${result.total} chunks, ${result.failed} failed`);
+      } else {
+        console.log('⚠️  Webhook: 0 chunks to embed (no added/modified files in payload)');
       }
 
       await writeAuditLog({
@@ -97,7 +104,7 @@ const handleGithubWebhook = async (req, res) => {
         metadata: { sha, filesChanged: filesChanged.length },
       });
     } catch (err) {
-      console.error('Webhook processing error:', err.message);
+      console.error('❌ Webhook processing error:', err.message);
       await writeAuditLog({
         userId: null,
         action: 'webhook_processing_error',

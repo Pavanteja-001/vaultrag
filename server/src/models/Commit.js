@@ -25,6 +25,5 @@ const commitSchema = new mongoose.Schema({
 });
 
 commitSchema.index({ mergedAt: -1 });
-commitSchema.index({ sha: 1 }, { unique: true });
 
 module.exports = mongoose.model('Commit', commitSchema);
