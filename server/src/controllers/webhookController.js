@@ -5,29 +5,39 @@ const { processChunks } = require('../workers/embeddingWorker');
 const { writeAuditLog } = require('../utils/auditLogger');
 const Commit = require('../models/Commit');
 
-const fetchFileContent = (repoFullName, filepath, ref) =>
+const githubGet = (url) =>
   new Promise((resolve) => {
-    const url = `https://api.github.com/repos/${repoFullName}/contents/${encodeURIComponent(filepath)}?ref=${ref}`;
     const headers = { 'User-Agent': 'VaultRAG', Accept: 'application/vnd.github+json' };
     if (process.env.GITHUB_TOKEN) headers['Authorization'] = `Bearer ${process.env.GITHUB_TOKEN}`;
-
     https.get(url, { headers }, (res) => {
       let data = '';
       res.on('data', (c) => { data += c; });
       res.on('end', () => {
-        try {
-          const json = JSON.parse(data);
-          if (json.content && json.encoding === 'base64') {
-            resolve(Buffer.from(json.content, 'base64').toString('utf-8'));
-          } else {
-            resolve(null);
-          }
-        } catch {
-          resolve(null);
-        }
+        try { resolve(JSON.parse(data)); }
+        catch { resolve(null); }
       });
     }).on('error', () => resolve(null));
   });
+
+const fetchFileContent = async (repoFullName, filepath, ref) => {
+  const json = await githubGet(`https://api.github.com/repos/${repoFullName}/contents/${encodeURIComponent(filepath)}?ref=${ref}`);
+  if (json?.content && json?.encoding === 'base64') {
+    return Buffer.from(json.content, 'base64').toString('utf-8');
+  }
+  return null;
+};
+
+const fetchCommitDiff = async (repoFullName, sha) => {
+  const json = await githubGet(`https://api.github.com/repos/${repoFullName}/commits/${sha}`);
+  if (!json?.files) return [];
+  return json.files.map((f) => ({
+    filepath: f.filename,
+    status: f.status,
+    additions: f.additions || 0,
+    deletions: f.deletions || 0,
+    patch: f.patch || '',  // unified diff — may be empty for binary files
+  }));
+};
 
 // In-memory deduplication set (last 1000 delivery IDs)
 const seenDeliveryIds = new Set();
@@ -97,17 +107,24 @@ const handleGithubWebhook = async (req, res) => {
       ];
       const mergedAt = new Date(headCommit.timestamp || Date.now());
 
+      const repoFullName = payload.repository?.full_name;
+
       console.log(`🔀 Commit: ${sha.slice(0, 7)} by ${authorGithubId} — "${message}" (${filesChanged.length} files)`);
 
-      // Store commit record
+      // Fetch diff from GitHub API
+      const fileDiffs = repoFullName ? await fetchCommitDiff(repoFullName, sha) : [];
+      if (fileDiffs.length > 0) {
+        console.log(`  📊 Diff fetched: ${fileDiffs.length} file(s) — ${fileDiffs.reduce((a, f) => a + f.additions, 0)}+ ${fileDiffs.reduce((a, f) => a + f.deletions, 0)}-`);
+      }
+
+      // Store commit record with diff
       await Commit.findOneAndUpdate(
         { sha },
-        { sha, message, authorGithubId, filesChanged, mergedAt },
+        { sha, message, authorGithubId, filesChanged, mergedAt, fileDiffs },
         { upsert: true }
       );
 
       // Chunk changed files — fetch real content from GitHub API
-      const repoFullName = payload.repository?.full_name;
       const allChunks = [];
       for (const filepath of [...(headCommit.added || []), ...(headCommit.modified || [])]) {
         let content = null;

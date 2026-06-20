@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
 import axiosClient from '../api/axiosClient';
 
-const IDLE_INTERVAL = 30000;   // 30s when synced/incomplete — just to catch new pushes
-const ACTIVE_INTERVAL = 3000;  // 3s when syncing — fast live updates
+const IDLE_INTERVAL = 8000;    // 8s when synced/incomplete — short enough to catch a new push
+const ACTIVE_INTERVAL = 2000;  // 2s when syncing — fast live updates
 
 export const useSyncStatus = () => {
   const [syncStatus, setSyncStatus] = useState({ status: 'synced', lastSyncedAt: null, failedFiles: [] });

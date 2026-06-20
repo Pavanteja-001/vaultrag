@@ -93,6 +93,9 @@ const processChunks = async ({ chunks, commitHash, sourceType = 'code' }) => {
 
   const hasFailed = failedFiles.size > 0;
 
+  // Hold 'syncing' for 12s so the frontend 8s poll always catches it at least once
+  await sleep(12000);
+
   // Update sync status
   await Config.findByIdAndUpdate(
     'daily_budget',

@@ -11,7 +11,7 @@ const CommitTraceGraph = ({ commits = [], flaggedSha }) => {
 
       <div className="space-y-3">
         {commits.slice(0, 8).map((commit, i) => {
-          const isFlagged = commit.sha === flaggedSha || commit.filepath === flaggedSha;
+          const isFlagged = flaggedSha != null && (commit.sha === flaggedSha || commit.filepath === flaggedSha);
 
           return (
             <motion.div

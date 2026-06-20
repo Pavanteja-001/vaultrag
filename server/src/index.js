@@ -44,6 +44,7 @@ app.use('/api/audit-logs', require('./routes/audit'));
 app.use('/api/admin', require('./routes/admin'));
 app.use('/api/webhooks', require('./routes/webhooks'));
 app.use('/api/sync-status', require('./routes/syncStatus'));
+app.use('/api/chat', require('./routes/chat'));
 
 // Health check
 app.get('/api/health', (req, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));

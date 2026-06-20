@@ -1,12 +1,22 @@
 import React, { useEffect, useRef } from 'react';
 import { UserMessageBubble, VaultRAGMessageBubble, SecurityAlertBubble, LoadingBubble } from './Bubbles';
 
-const MessageThread = ({ messages, loading }) => {
+const MessageThread = ({ messages, loading, historyLoading }) => {
   const bottomRef = useRef(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, loading]);
+
+  if (historyLoading) {
+    return (
+      <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+        {[80, 56, 96, 64].map((h, i) => (
+          <div key={i} className={`glass-card skeleton rounded-2xl ${i % 2 === 0 ? 'ml-auto max-w-sm' : 'max-w-xl'}`} style={{ height: h }} />
+        ))}
+      </div>
+    );
+  }
 
   if (messages.length === 0 && !loading) {
     return (

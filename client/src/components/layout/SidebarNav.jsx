@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { NavLink } from 'react-router-dom';
+import { NavLink, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { MessageSquare, CheckSquare, BarChart2, Upload, FileText, Shield, Users, Menu, X } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
@@ -14,7 +14,51 @@ const NAV_ITEMS = [
   { path: '/admin/roles', label: 'Role Management', icon: Users, minRole: 3 },
 ];
 
-const ROLE_LABELS = { 1: 'Junior Dev', 2: 'Senior Engineer', 3: 'PM / Admin' };
+const ROLE_LABELS = { 1: 'Junior Dev', 2: 'Senior Dev', 3: 'PM / Admin' };
+const ROLE_COLORS = { 1: 'text-neon-blue', 2: 'text-neon-purple', 3: 'text-neon-red' };
+
+const NavItem = ({ item, collapsed, onClick }) => {
+  const location = useLocation();
+  const isActive = location.pathname === item.path || location.pathname.startsWith(item.path + '/');
+
+  if (collapsed) {
+    return (
+      <NavLink
+        to={item.path}
+        title={item.label}
+        onClick={onClick}
+        className={`relative flex items-center justify-center w-10 h-10 mx-auto rounded-xl transition-all duration-200 group ${
+          isActive
+            ? 'bg-white/[0.07] text-neon-blue'
+            : 'text-gray-500 hover:text-white hover:bg-white/[0.05]'
+        }`}
+      >
+        <item.icon className="w-[18px] h-[18px]" />
+      </NavLink>
+    );
+  }
+
+  return (
+    <div className="relative">
+      <NavLink
+        to={item.path}
+        onClick={onClick}
+        className={`flex items-center gap-3 mx-3 px-3 py-2.5 rounded-xl text-sm transition-all duration-200 group ${
+          isActive
+            ? 'bg-white/[0.06] text-white'
+            : 'text-gray-400 hover:text-white hover:bg-white/[0.04]'
+        }`}
+      >
+        <item.icon
+          className={`w-[18px] h-[18px] flex-shrink-0 transition-colors ${
+            isActive ? 'text-neon-blue' : 'group-hover:text-neon-blue'
+          }`}
+        />
+        <span className="font-medium leading-none">{item.label}</span>
+      </NavLink>
+    </div>
+  );
+};
 
 const SidebarNav = () => {
   const { user } = useAuth();
@@ -22,40 +66,72 @@ const SidebarNav = () => {
   const userRole = user?.role || 1;
   const visibleItems = NAV_ITEMS.filter((item) => userRole >= item.minRole);
 
-  const NavItem = ({ item, collapsed }) => (
-    <NavLink
-      key={item.path}
-      to={item.path}
-      onClick={() => setMobileOpen(false)}
-      title={collapsed ? item.label : undefined}
-      className={({ isActive }) =>
-        `flex items-center gap-3 rounded-xl text-sm transition-all duration-200 group relative ${
-          collapsed ? 'px-0 py-2.5 justify-center' : 'px-3 py-2.5'
-        } ${
-          isActive
-            ? 'bg-white/5 text-white shadow-glow-ai'
-            : 'text-gray-400 hover:text-white hover:bg-surface-700'
-        }`
-      }
-    >
-      {({ isActive }) => (
-        <>
-          {isActive && !collapsed && (
-            <motion.div
-              layoutId="nav-active"
-              className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-5 rounded-full bg-gradient-ai"
-            />
-          )}
-          <item.icon className={`w-4 h-4 flex-shrink-0 ${isActive ? 'text-neon-blue' : 'group-hover:text-neon-blue transition-colors'}`} />
-          {!collapsed && <span className="font-medium">{item.label}</span>}
-        </>
+  const SidebarContent = ({ collapsed }) => (
+    <>
+      {/* Logo */}
+      {collapsed ? (
+        <div className="h-14 flex items-center justify-center border-b border-white/[0.06]">
+          <div className="w-8 h-8 rounded-lg bg-gradient-ai flex items-center justify-center shadow-glow-ai">
+            <span className="text-xs font-bold text-white">V</span>
+          </div>
+        </div>
+      ) : (
+        <div className="h-14 flex items-center px-5 border-b border-white/[0.06]">
+          <div className="flex items-center gap-2.5">
+            <div className="w-7 h-7 rounded-lg bg-gradient-ai flex items-center justify-center shadow-glow-ai flex-shrink-0">
+              <span className="text-[11px] font-bold text-white">V</span>
+            </div>
+            <div>
+              <h1 className="font-heading text-[15px] font-bold gradient-text leading-tight tracking-tight">VaultRAG</h1>
+              <p className="text-[10px] text-gray-500 leading-tight">AI Knowledge Assistant</p>
+            </div>
+          </div>
+        </div>
       )}
-    </NavLink>
+
+      {/* Nav items */}
+      <nav className="flex-1 py-3 space-y-0.5 overflow-y-auto">
+        {visibleItems.map((item) => (
+          <NavItem
+            key={item.path}
+            item={item}
+            collapsed={collapsed}
+            onClick={() => setMobileOpen(false)}
+          />
+        ))}
+      </nav>
+
+      {/* User footer */}
+      {collapsed ? (
+        <div className="h-14 flex items-center justify-center border-t border-white/[0.06]">
+          <div
+            className="w-7 h-7 rounded-full bg-gradient-ai flex items-center justify-center text-xs font-bold text-white"
+            title={user?.email}
+          >
+            {user?.email?.[0]?.toUpperCase() || 'U'}
+          </div>
+        </div>
+      ) : (
+        <div className="px-4 py-3 border-t border-white/[0.06]">
+          <div className="flex items-center gap-2.5">
+            <div className="w-7 h-7 rounded-full bg-gradient-ai flex items-center justify-center text-xs font-bold text-white flex-shrink-0">
+              {user?.email?.[0]?.toUpperCase() || 'U'}
+            </div>
+            <div className="min-w-0">
+              <p className="text-[11px] text-gray-300 truncate font-medium">{user?.email}</p>
+              <p className={`text-[10px] font-semibold ${ROLE_COLORS[userRole]}`}>
+                L{userRole} — {ROLE_LABELS[userRole]}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 
   return (
     <>
-      {/* Mobile hamburger button — shown only below md */}
+      {/* Mobile hamburger */}
       <button
         className="md:hidden fixed top-4 left-4 z-50 p-2 glass-card rounded-xl text-gray-400 hover:text-white transition-colors"
         onClick={() => setMobileOpen((v) => !v)}
@@ -76,7 +152,7 @@ const SidebarNav = () => {
         )}
       </AnimatePresence>
 
-      {/* Mobile sidebar (full-width drawer) */}
+      {/* Mobile drawer */}
       <AnimatePresence>
         {mobileOpen && (
           <motion.aside
@@ -84,71 +160,21 @@ const SidebarNav = () => {
             animate={{ x: 0 }}
             exit={{ x: -240 }}
             transition={{ type: 'tween', duration: 0.22 }}
-            className="md:hidden w-60 h-screen flex flex-col bg-surface-800 border-r border-white/5 fixed left-0 top-0 z-50"
+            className="md:hidden w-60 h-screen flex flex-col bg-surface-800 border-r border-white/[0.06] fixed left-0 top-0 z-50 pt-10"
           >
-            <div className="p-5 pt-16 border-b border-white/5">
-              <h1 className="font-heading text-xl font-bold gradient-text tracking-tight">VaultRAG</h1>
-              <p className="text-xs text-gray-500 mt-0.5">AI Knowledge Assistant</p>
-            </div>
-            <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
-              {visibleItems.map((item) => <NavItem key={item.path} item={item} collapsed={false} />)}
-            </nav>
-            <div className="p-4 border-t border-white/5">
-              <div className="flex items-center gap-2">
-                <div className="w-7 h-7 rounded-full bg-gradient-ai flex items-center justify-center text-xs font-bold text-white">
-                  {user?.email?.[0]?.toUpperCase() || 'U'}
-                </div>
-                <div className="min-w-0">
-                  <p className="text-xs text-white truncate">{user?.email}</p>
-                  <p className={`text-xs font-medium ${userRole === 3 ? 'text-neon-red' : userRole === 2 ? 'text-neon-purple' : 'text-neon-blue'}`}>
-                    L{userRole} — {ROLE_LABELS[userRole]}
-                  </p>
-                </div>
-              </div>
-            </div>
+            <SidebarContent collapsed={false} />
           </motion.aside>
         )}
       </AnimatePresence>
 
-      {/* Tablet sidebar — icon-only, visible md to lg */}
-      <aside className="hidden md:flex lg:hidden w-16 h-screen flex-col bg-surface-800 border-r border-white/5 fixed left-0 top-0 z-40">
-        <div className="p-3 border-b border-white/5 flex justify-center">
-          <div className="w-8 h-8 rounded-lg bg-gradient-ai flex items-center justify-center">
-            <span className="text-xs font-bold text-white">V</span>
-          </div>
-        </div>
-        <nav className="flex-1 p-2 space-y-1 overflow-y-auto">
-          {visibleItems.map((item) => <NavItem key={item.path} item={item} collapsed={true} />)}
-        </nav>
-        <div className="p-3 border-t border-white/5 flex justify-center">
-          <div className="w-7 h-7 rounded-full bg-gradient-ai flex items-center justify-center text-xs font-bold text-white" title={user?.email}>
-            {user?.email?.[0]?.toUpperCase() || 'U'}
-          </div>
-        </div>
+      {/* Tablet sidebar — icon only */}
+      <aside className="hidden md:flex lg:hidden w-16 h-screen flex-col bg-surface-800 border-r border-white/[0.06] fixed left-0 top-0 z-40">
+        <SidebarContent collapsed={true} />
       </aside>
 
-      {/* Desktop sidebar — full, visible lg+ */}
-      <aside className="hidden lg:flex w-60 h-screen flex-col bg-surface-800 border-r border-white/5 fixed left-0 top-0 z-40">
-        <div className="p-5 border-b border-white/5">
-          <h1 className="font-heading text-xl font-bold gradient-text tracking-tight">VaultRAG</h1>
-          <p className="text-xs text-gray-500 mt-0.5">AI Knowledge Assistant</p>
-        </div>
-        <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
-          {visibleItems.map((item) => <NavItem key={item.path} item={item} collapsed={false} />)}
-        </nav>
-        <div className="p-4 border-t border-white/5">
-          <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-full bg-gradient-ai flex items-center justify-center text-xs font-bold text-white">
-              {user?.email?.[0]?.toUpperCase() || 'U'}
-            </div>
-            <div className="min-w-0">
-              <p className="text-xs text-white truncate">{user?.email}</p>
-              <p className={`text-xs font-medium ${userRole === 3 ? 'text-neon-red' : userRole === 2 ? 'text-neon-purple' : 'text-neon-blue'}`}>
-                L{userRole} — {ROLE_LABELS[userRole]}
-              </p>
-            </div>
-          </div>
-        </div>
+      {/* Desktop sidebar — full */}
+      <aside className="hidden lg:flex w-60 h-screen flex-col bg-surface-800 border-r border-white/[0.06] fixed left-0 top-0 z-40">
+        <SidebarContent collapsed={false} />
       </aside>
     </>
   );
