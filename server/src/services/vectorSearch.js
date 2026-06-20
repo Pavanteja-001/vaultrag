@@ -30,6 +30,7 @@ const searchChunks = async (queryEmbedding, userRole, limit = 5) => {
         'metadata.filepath': 1,
         'metadata.sourceType': 1,
         'metadata.astNodeType': 1,
+        'metadata.commitHash': 1,
         score: { $meta: 'vectorSearchScore' },
       },
     },
@@ -41,6 +42,7 @@ const searchChunks = async (queryEmbedding, userRole, limit = 5) => {
     filepath: r.metadata.filepath,
     sourceType: r.metadata.sourceType,
     astNodeType: r.metadata.astNodeType,
+    commitHash: r.metadata.commitHash,
     score: r.score,
   }));
 };

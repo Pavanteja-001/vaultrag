@@ -27,6 +27,7 @@ const knowledgeChunkSchema = new mongoose.Schema({
       enum: ['code', 'prd', 'mockup'],
     },
     astNodeType: { type: String, default: null },
+    startLine: { type: Number, default: 0 },
     version: { type: String, default: null },
     status: {
       type: String,
@@ -39,6 +40,6 @@ const knowledgeChunkSchema = new mongoose.Schema({
 
 knowledgeChunkSchema.index({ 'metadata.requiredRole': 1 });
 knowledgeChunkSchema.index({ 'metadata.status': 1 });
-knowledgeChunkSchema.index({ 'metadata.filepath': 1, 'metadata.astNodeType': 1 });
+knowledgeChunkSchema.index({ 'metadata.filepath': 1, 'metadata.astNodeType': 1, 'metadata.startLine': 1 });
 
 module.exports = mongoose.model('KnowledgeChunk', knowledgeChunkSchema);

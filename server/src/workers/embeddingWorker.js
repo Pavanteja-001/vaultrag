@@ -21,6 +21,7 @@ const embedChunkWithRetry = async (chunk, commitHash, sourceType) => {
         {
           'metadata.filepath': chunk.filepath,
           'metadata.astNodeType': chunk.nodeType,
+          'metadata.startLine': chunk.startLine ?? 0,
         },
         {
           content: chunk.text,
@@ -31,6 +32,7 @@ const embedChunkWithRetry = async (chunk, commitHash, sourceType) => {
             commitHash: commitHash || null,
             sourceType: sourceType || 'code',
             astNodeType: chunk.nodeType,
+            startLine: chunk.startLine ?? 0,
             version: commitHash || null,
             status: 'active',
           },
@@ -49,6 +51,7 @@ const embedChunkWithRetry = async (chunk, commitHash, sourceType) => {
             {
               'metadata.filepath': chunk.filepath,
               'metadata.astNodeType': chunk.nodeType,
+              'metadata.startLine': chunk.startLine ?? 0,
             },
             {
               $set: {

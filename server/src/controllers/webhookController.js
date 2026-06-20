@@ -1,8 +1,33 @@
 const crypto = require('crypto');
+const https = require('https');
 const { chunkFile } = require('../services/chunkingService');
 const { processChunks } = require('../workers/embeddingWorker');
 const { writeAuditLog } = require('../utils/auditLogger');
 const Commit = require('../models/Commit');
+
+const fetchFileContent = (repoFullName, filepath, ref) =>
+  new Promise((resolve) => {
+    const url = `https://api.github.com/repos/${repoFullName}/contents/${encodeURIComponent(filepath)}?ref=${ref}`;
+    const headers = { 'User-Agent': 'VaultRAG', Accept: 'application/vnd.github+json' };
+    if (process.env.GITHUB_TOKEN) headers['Authorization'] = `Bearer ${process.env.GITHUB_TOKEN}`;
+
+    https.get(url, { headers }, (res) => {
+      let data = '';
+      res.on('data', (c) => { data += c; });
+      res.on('end', () => {
+        try {
+          const json = JSON.parse(data);
+          if (json.content && json.encoding === 'base64') {
+            resolve(Buffer.from(json.content, 'base64').toString('utf-8'));
+          } else {
+            resolve(null);
+          }
+        } catch {
+          resolve(null);
+        }
+      });
+    }).on('error', () => resolve(null));
+  });
 
 // In-memory deduplication set (last 1000 delivery IDs)
 const seenDeliveryIds = new Set();
@@ -20,6 +45,7 @@ const verifyWebhookSignature = (payload, signature) => {
 };
 
 const handleGithubWebhook = async (req, res) => {
+  process.stdout.write('\n🔔 WEBHOOK HIT\n');
   // Step 1: Verify HMAC-SHA256 signature before anything else
   const signature = req.headers['x-hub-signature-256'];
   if (!signature || !verifyWebhookSignature(req.rawBody, signature)) {
@@ -80,12 +106,20 @@ const handleGithubWebhook = async (req, res) => {
         { upsert: true }
       );
 
-      // Chunk changed files
+      // Chunk changed files — fetch real content from GitHub API
+      const repoFullName = payload.repository?.full_name;
       const allChunks = [];
       for (const filepath of [...(headCommit.added || []), ...(headCommit.modified || [])]) {
-        const content = `// File: ${filepath}\n// Commit: ${sha}\n// Author: ${authorGithubId}`;
+        let content = null;
+        if (repoFullName) {
+          content = await fetchFileContent(repoFullName, filepath, sha);
+        }
+        if (!content) {
+          // Fallback to metadata-only if GitHub API unavailable
+          content = `// File: ${filepath}\n// Commit: ${sha}\n// Author: ${authorGithubId}`;
+        }
         const chunks = chunkFile(filepath, content);
-        console.log(`  📄 ${filepath} → ${chunks.length} chunk(s)`);
+        console.log(`  📄 ${filepath} → ${chunks.length} chunk(s) (${content.length} bytes)`);
         allChunks.push(...chunks);
       }
 

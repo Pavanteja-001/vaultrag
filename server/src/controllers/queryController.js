@@ -84,7 +84,21 @@ const handleQuery = async (req, res) => {
     return res.json({ answer: 'No relevant content found in the knowledge base for your query.', sources: [] });
   }
 
-  const context = sources.map((s) => `[${s.filepath}]\n${s.content}`).join('\n\n---\n\n');
+  // Enrich context with commit author info for each chunk
+  const commitMap = {};
+  const commitHashes = [...new Set(sources.map((s) => s.commitHash).filter(Boolean))];
+  if (commitHashes.length > 0) {
+    const commits = await Commit.find({ sha: { $in: commitHashes } }).lean();
+    commits.forEach((c) => { commitMap[c.sha] = c; });
+  }
+
+  const context = sources.map((s) => {
+    const commit = s.commitHash ? commitMap[s.commitHash] : null;
+    const meta = commit
+      ? `// File: ${s.filepath} | Last commit: ${s.commitHash?.slice(0, 7)} by ${commit.authorGithubId} on ${new Date(commit.mergedAt).toISOString().slice(0, 10)} — "${commit.message}" | Files changed: ${commit.filesChanged.join(', ')}`
+      : `// File: ${s.filepath}`;
+    return `${meta}\n${s.content}`;
+  }).join('\n\n---\n\n');
 
   // Generate answer — retry once internally, then return raw sources
   let answer;

@@ -68,10 +68,15 @@ export const VaultRAGMessageBubble = ({ message }) => (
             </ReactMarkdown>
           </div>
 
-          {/* Sources / Citation pills */}
+          {/* Sources / Citation pills — deduplicated by filepath */}
           {message.sources && message.sources.length > 0 && (
             <div className="flex flex-wrap gap-2 mt-4 pt-3 border-t border-white/5">
-              {message.sources.map((source, i) => (
+              {Array.from(
+                message.sources.reduce((map, s) => {
+                  if (!map.has(s.filepath)) map.set(s.filepath, s);
+                  return map;
+                }, new Map()).values()
+              ).map((source, i) => (
                 <CitationPill key={i} filepath={source.filepath} snippet={source.snippet} />
               ))}
             </div>
