@@ -8,6 +8,7 @@ const Commit = require('../models/Commit');
 const ChatMessage = require('../models/ChatMessage');
 const Conversation = require('../models/Conversation');
 const SmeTrace = require('../models/SmeTrace');
+const KnowledgeChunk = require('../models/KnowledgeChunk');
 
 const saveChatPair = async (userId, question, assistantMsg, conversationId) => {
   try {
@@ -33,6 +34,14 @@ const isPerformanceQuery = (q) => PERF_KEYWORDS.some((kw) => q.toLowerCase().inc
 // Detect queries about recent/last commit history
 const COMMIT_KEYWORDS = ['last commit', 'latest commit', 'recent commit', 'last push', 'latest push', 'what was committed', 'what was pushed', 'recent changes', 'latest changes'];
 const isCommitHistoryQuery = (q) => COMMIT_KEYWORDS.some((kw) => q.toLowerCase().includes(kw));
+
+// Detect UI/design/mockup queries — always inject ALL mockup chunks so nothing is missed
+const UI_KEYWORDS = ['ui', 'design', 'mockup', 'screen', 'page', 'interface', 'frontend', 'completed', 'completion', 'designed', 'layout', 'wireframe', 'figma', 'how much'];
+const isUIQuery = (q) => UI_KEYWORDS.some((kw) => q.toLowerCase().includes(kw));
+
+// Detect full project status queries — inject BOTH frontend and backend inventory
+const PROJECT_STATUS_KEYWORDS = ['project completion', 'project status', 'percent of', 'percentage of', 'how much done', 'whole project', 'entire project', 'overall completion', 'frontend and backend', 'backend and frontend', 'project progress', 'what is done', 'what\'s done', 'completion status'];
+const isProjectStatusQuery = (q) => PROJECT_STATUS_KEYWORDS.some((kw) => q.toLowerCase().includes(kw));
 
 const handleQuery = async (req, res) => {
   const { question, conversationId } = req.body;
@@ -92,12 +101,133 @@ const handleQuery = async (req, res) => {
   }
 
   // Vector search with RBAC filter inside the query
+  // UI queries get higher limit so mockups don't get squeezed out by code chunks
+  const searchLimit = isUIQuery(question) ? 12 : 5;
   let sources;
   try {
-    sources = await searchChunks(queryEmbedding, userRole);
+    sources = await searchChunks(queryEmbedding, userRole, searchLimit);
   } catch (err) {
     await writeAuditLog({ userId, action: 'query_search_failed', wasBlocked: false, metadata: { error: err.message } });
     return res.status(503).json({ error: "Couldn't search the knowledge base right now — please retry." });
+  }
+
+  // For UI queries: build a structured inventory header so the LLM knows exactly
+  // what is CODED (committed JSX/CSS files) vs DESIGNED (mockup descriptions)
+  let uiInventoryHeader = '';
+  if (isUIQuery(question)) {
+    try {
+      // All active frontend code files (role 1, not mockups/PRDs)
+      // requiredRole:1 is cleaner than extension matching — hooks are .js not .jsx
+      const frontendFiles = await KnowledgeChunk.find({
+        'metadata.status': 'active',
+        'metadata.requiredRole': 1,
+        'metadata.sourceType': { $nin: ['mockup', 'prd'] },
+      }).distinct('metadata.filepath');
+
+      // All active mockup descriptions
+      const mockupFiles = await KnowledgeChunk.find({
+        'metadata.sourceType': 'mockup',
+        'metadata.status': 'active',
+        'metadata.requiredRole': { $lte: userRole },
+      }).distinct('metadata.filepath');
+
+      // Categorise files so the model doesn't confuse components with screens
+      const pages    = frontendFiles.filter((f) => /\/pages\//i.test(f));
+      const comps    = frontendFiles.filter((f) => /\/components\//i.test(f));
+      const hooks    = frontendFiles.filter((f) => /\/hooks\//i.test(f));
+      const styles   = frontendFiles.filter((f) => /\.(css|scss|less)$/i.test(f));
+      const other    = frontendFiles.filter((f) => !pages.includes(f) && !comps.includes(f) && !hooks.includes(f) && !styles.includes(f));
+
+      const fmt = (arr) => arr.length ? arr.map((f) => `  - ${f}`).join('\n') : '  (none)';
+
+      const designedList = mockupFiles.length
+        ? mockupFiles.map((f) => `  - ${f}`).join('\n')
+        : '  (none uploaded yet)';
+
+      uiInventoryHeader = `// ════════════════════════════════════════════════════════
+// UI INVENTORY — use ONLY this section for completion/coverage questions
+//
+// CODED PAGES (full navigable screens, count these as "screens coded"):
+${fmt(pages)}
+//
+// CODED COMPONENTS (reusable parts, NOT standalone screens — do NOT count as screens):
+${fmt(comps)}
+//
+// CODED HOOKS (logic only, not screens):
+${fmt(hooks)}
+//
+// CODED STYLES:
+${fmt(styles)}${other.length ? `\n// OTHER:\n${fmt(other)}` : ''}
+//
+// DESIGNED screens (uploaded mockup images — these are the "designed" screens):
+${designedList}
+//
+// RULE: UI screen count = number of CODED PAGES (not components/hooks/styles)
+// ════════════════════════════════════════════════════════\n\n`;
+
+      // Also inject all mockup descriptions into sources so the LLM has their content
+      const allMockupChunks = await KnowledgeChunk.find({
+        'metadata.sourceType': 'mockup',
+        'metadata.status': 'active',
+        'metadata.requiredRole': { $lte: userRole },
+      }).select('content metadata').lean();
+
+      const existingIds = new Set(sources.map((s) => s.id));
+      for (const mc of allMockupChunks) {
+        if (!existingIds.has(mc._id.toString())) {
+          sources.push({
+            id: mc._id.toString(),
+            content: mc.content,
+            filepath: mc.metadata.filepath,
+            sourceType: mc.metadata.sourceType,
+            astNodeType: mc.metadata.astNodeType,
+            commitHash: null,
+            score: 0,
+          });
+        }
+      }
+    } catch { /* non-fatal */ }
+  }
+
+  // For project status queries: append backend implementation inventory
+  // Scans all controller chunks for implemented vs 501 (not yet built) endpoints
+  if (isProjectStatusQuery(question) || (isUIQuery(question) && /backend|api|endpoint|overall|whole|entire|percent/i.test(question))) {
+    try {
+      const controllerChunks = await KnowledgeChunk.find({
+        'metadata.status': 'active',
+        'metadata.requiredRole': { $lte: userRole },
+        'metadata.filepath': { $regex: /controller/i },
+      }).select('content metadata.filepath').lean();
+
+      // Group by file, check for 501 to detect unimplemented functions
+      const backendMap = {};
+      for (const chunk of controllerChunks) {
+        const file = chunk.metadata.filepath;
+        if (!backendMap[file]) backendMap[file] = { implemented: [], unimplemented: [] };
+        // A chunk is a stub only if it BOTH contains 501 AND returns immediately
+        // (avoids false positives where 501 appears as a comment or in a different function)
+        const isStub = /res\.status\(501\)|\.json\(\s*\{[^}]*501/.test(chunk.content);
+        const fnMatch = chunk.content.match(/(?:const|async function|function)\s+(\w+)/);
+        if (fnMatch) {
+          if (isStub) backendMap[file].unimplemented.push(fnMatch[1]);
+          else backendMap[file].implemented.push(fnMatch[1]);
+        }
+      }
+
+      const backendLines = Object.entries(backendMap).map(([file, { implemented, unimplemented }]) => {
+        const imp = implemented.length ? `implemented: ${implemented.join(', ')}` : '';
+        const unimp = unimplemented.length ? `NOT YET BUILT (returns 501): ${unimplemented.join(', ')}` : '';
+        return `  - ${file}: ${[imp, unimp].filter(Boolean).join(' | ')}`;
+      });
+
+      if (backendLines.length) {
+        uiInventoryHeader += `// ════════════════════════════════════════════════════════
+// BACKEND INVENTORY — implemented vs unimplemented API endpoints
+${backendLines.join('\n')}
+// RULE: count only files/functions NOT marked "NOT YET BUILT" as implemented
+// ════════════════════════════════════════════════════════\n\n`;
+      }
+    } catch { /* non-fatal */ }
   }
 
   if (!sources || sources.length === 0) {
@@ -125,30 +255,53 @@ const handleQuery = async (req, res) => {
     }
   }
 
-  const context = recentCommitHeader + sources.map((s) => {
+  // Build context — cap each chunk to prevent token overflow with Groq
+  // Mockup/PRD/README descriptions get more space; code chunks get less (diffs are verbose)
+  const MAX_CONTEXT_CHARS = 8000;
+  let totalChars = recentCommitHeader.length;
+
+  const contextParts = [];
+  for (const s of sources) {
+    if (totalChars >= MAX_CONTEXT_CHARS) break;
+
+    const isMockup = s.sourceType === 'mockup';
+    const isPRD = s.sourceType === 'prd';
+    const isDoc = isMockup || isPRD || s.filepath?.endsWith('.md') || s.filepath?.endsWith('.txt');
+
     const commit = s.commitHash ? commitMap[s.commitHash] : null;
     const meta = commit
       ? `// File: ${s.filepath} | Last commit: ${s.commitHash?.slice(0, 7)} by ${commit.authorGithubId} on ${new Date(commit.mergedAt).toISOString().slice(0, 10)} — "${commit.message}"`
       : `// File: ${s.filepath}`;
 
-    // Include the diff patch for this file if available
-    const fileDiff = commit?.fileDiffs?.find((d) => d.filepath === s.filepath);
+    // Skip diffs for doc/mockup chunks — they bloat context for no benefit
+    const fileDiff = !isDoc && commit?.fileDiffs?.find((d) => d.filepath === s.filepath);
     const diffSection = fileDiff?.patch
-      ? `\n// DIFF (+${fileDiff.additions} -${fileDiff.deletions}):\n${fileDiff.patch.slice(0, 1500)}`
+      ? `\n// DIFF (+${fileDiff.additions} -${fileDiff.deletions}):\n${fileDiff.patch.slice(0, 800)}`
       : '';
 
-    return `${meta}${diffSection}\n\n// CURRENT CODE:\n${s.content}`;
-  }).join('\n\n---\n\n');
+    // Mockups/PRD get 1200 chars; code gets 600 chars
+    const contentLimit = isDoc ? 1200 : 600;
+    const content = s.content.slice(0, contentLimit);
 
-  // Generate answer — retry once internally, then return raw sources
+    const part = `${meta}${diffSection}\n\n${isDoc ? '// CONTENT:\n' : '// CURRENT CODE:\n'}${content}`;
+    contextParts.push(part);
+    totalChars += part.length;
+  }
+
+  const context = uiInventoryHeader + recentCommitHeader + contextParts.join('\n\n---\n\n');
+
+  // Generate answer — retry once with backoff internally, then return graceful fallback
   let answer;
   try {
     answer = await generateAnswer(context, question);
-  } catch {
-    // Both attempts failed — return raw sources with fallback message
-    await writeAuditLog({ userId, action: 'query_generation_failed', wasBlocked: false });
+  } catch (genErr) {
+    const isRateLimit = genErr?.status === 429 || genErr?.message?.includes('429') || genErr?.message?.includes('rate');
+    await writeAuditLog({ userId, action: 'query_generation_failed', wasBlocked: false, metadata: { error: genErr?.message } });
+    const fallbackMsg = isRateLimit
+      ? 'The AI is being rate-limited — please wait 5–10 seconds and try again. Here are the relevant sources found:'
+      : 'Found relevant sources but couldn\'t generate an answer right now — please retry in a moment.';
     return res.json({
-      answer: 'Found relevant sources but couldn\'t generate an answer — here are the raw sources.',
+      answer: fallbackMsg,
       sources: sources.map((s) => ({ filepath: s.filepath, snippet: s.content.slice(0, 300) })),
       fallback: true,
     });

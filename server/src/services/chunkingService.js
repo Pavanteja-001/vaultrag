@@ -1,6 +1,5 @@
 const path = require('path');
 
-// Role tagging rules — configurable via ROLE_RULES_CONFIG env var (JSON file path)
 const DEFAULT_ROLE_RULES = [
   // Role 3 (most restricted) — checked first
   { pattern: /src\/config\//i, role: 3 },
@@ -15,32 +14,32 @@ const DEFAULT_ROLE_RULES = [
   { pattern: /src\/workers\//i, role: 2 },
   { pattern: /src\/models\//i, role: 2 },
   { pattern: /src\/routes\//i, role: 2 },
-  // Role 1 (public)
+  // Role 1 (frontend / public — visible to L1 junior devs)
   { pattern: /src\/components\//i, role: 1 },
+  { pattern: /src\/pages\//i, role: 1 },
+  { pattern: /src\/hooks\//i, role: 1 },
+  { pattern: /src\/views\//i, role: 1 },
+  { pattern: /src\/screens\//i, role: 1 },
+  { pattern: /src\/styles\//i, role: 1 },
   { pattern: /public\//i, role: 1 },
   { pattern: /\.md$/i, role: 1 },
   { pattern: /\.txt$/i, role: 1 },
+  { pattern: /\.css$/i, role: 1 },
+  { pattern: /\.scss$/i, role: 1 },
+  { pattern: /\.less$/i, role: 1 },
   { pattern: /README/i, role: 1 },
 ];
 
 let roleRules = DEFAULT_ROLE_RULES;
 
-/**
- * Infers the required access role based on file path.
- * Returns 1 | 2 | 3. Defaults to 2 for unmatched paths.
- */
 const inferRequiredRole = (filepath) => {
   const normalized = filepath.replace(/\\/g, '/');
   for (const rule of roleRules) {
     if (rule.pattern.test(normalized)) return rule.role;
   }
-  return 2; // Default to role 2 for unknown paths
+  return 2;
 };
 
-/**
- * Chunks plain text (markdown, plain text, PRDs) by paragraph/section.
- * Returns array of { text, startLine, endLine, nodeType }.
- */
 const chunkByParagraph = (content, filepath) => {
   const lines = content.split('\n');
   const chunks = [];
@@ -70,11 +69,6 @@ const chunkByParagraph = (content, filepath) => {
   return chunks;
 };
 
-/**
- * Chunk JS/TS code using regex-based function/class detection.
- * Falls back to paragraph chunking for non-code files.
- * Returns array of { text, startLine, endLine, nodeType, filepath }.
- */
 const chunkJavaScript = (content, filepath) => {
   const lines = content.split('\n');
   const chunks = [];
@@ -126,16 +120,42 @@ const chunkJavaScript = (content, filepath) => {
   return chunks.length > 0 ? chunks : chunkByParagraph(content, filepath);
 };
 
-/**
- * Main chunking entry point.
- * Dispatches to the right chunker based on file extension.
- */
+// Chunk CSS/SCSS by rule block — groups up to 8 consecutive rules into one chunk
+// so semantic context (e.g. all button styles) stays together
+const chunkCSS = (content, filepath) => {
+  const chunks = [];
+  // Split on closing brace to get individual rule blocks
+  const blocks = content
+    .replace(/\/\*[\s\S]*?\*\//g, '') // strip comments
+    .split('}')
+    .map((b) => b.trim())
+    .filter((b) => b.length > 5 && b.includes('{'));
+
+  const GROUP_SIZE = 6;
+  for (let i = 0; i < blocks.length; i += GROUP_SIZE) {
+    const group = blocks.slice(i, i + GROUP_SIZE).map((b) => b + '}').join('\n\n');
+    if (group.trim().length > 20) {
+      chunks.push({
+        text: group.trim(),
+        startLine: i * GROUP_SIZE,
+        endLine: Math.min(i + GROUP_SIZE, blocks.length) * GROUP_SIZE,
+        nodeType: 'css_rules',
+        filepath,
+      });
+    }
+  }
+
+  return chunks.length > 0 ? chunks : chunkByParagraph(content, filepath);
+};
+
 const chunkFile = (filepath, content) => {
   const ext = path.extname(filepath).toLowerCase();
   let rawChunks;
 
   if (['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs'].includes(ext)) {
     rawChunks = chunkJavaScript(content, filepath);
+  } else if (['.css', '.scss', '.less'].includes(ext)) {
+    rawChunks = chunkCSS(content, filepath);
   } else if (['.py'].includes(ext)) {
     rawChunks = chunkByParagraph(content, filepath);
   } else {
