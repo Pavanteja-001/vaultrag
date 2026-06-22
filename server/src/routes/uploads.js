@@ -3,7 +3,7 @@ const router = express.Router();
 const multer = require('multer');
 const { authenticate } = require('../middleware/auth');
 const { requireRole } = require('../middleware/rbac');
-const { uploadPRD, uploadMockup } = require('../controllers/uploadsController');
+const { uploadPRD, uploadMockup, getMockupStatus } = require('../controllers/uploadsController');
 
 const storage = multer.memoryStorage();
 const upload = multer({
@@ -23,12 +23,14 @@ router.post('/mockup', authenticate, requireRole(3), upload.single('image'), upl
 const PRD = require('../models/PRD');
 const Mockup = require('../models/Mockup');
 router.get('/prds', authenticate, requireRole(2), async (req, res) => {
-  const prds = await PRD.find().select('filename requirements uploadedAt').lean();
+  const prds = await PRD.find().select('filename requirements fileUrl uploadedAt').lean();
   return res.json({ prds });
 });
 router.get('/mockups', authenticate, requireRole(1), async (req, res) => {
-  const mockups = await Mockup.find().select('filename status uploadedAt').lean();
+  const mockups = await Mockup.find().select('filename status imageUrl uploadedAt').lean();
   return res.json({ mockups });
 });
+
+router.get('/mockups/:id/status', authenticate, requireRole(1), getMockupStatus);
 
 module.exports = router;

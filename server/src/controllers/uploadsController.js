@@ -1,6 +1,7 @@
-const pdfParse = require('pdf-parse');
+const { PDFParse } = require('pdf-parse');
 const { embedText } = require('../services/embeddingService');
 const { parseMockup, VisionProcessingError } = require('../services/visionService');
+const { uploadImage, uploadFile } = require('../services/cloudinaryService');
 const { chunkFile } = require('../services/chunkingService');
 const { processChunks } = require('../workers/embeddingWorker');
 const { writeAuditLog } = require('../utils/auditLogger');
@@ -9,17 +10,16 @@ const Mockup = require('../models/Mockup');
 const KnowledgeChunk = require('../models/KnowledgeChunk');
 
 const uploadPRD = async (req, res) => {
-  if (!req.file) {
-    return res.status(400).json({ error: 'No file uploaded' });
-  }
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 
   const { originalname, buffer, mimetype } = req.file;
   let text;
 
-  // Extract text
   try {
     if (mimetype === 'application/pdf' || originalname.endsWith('.pdf')) {
-      const parsed = await pdfParse(buffer);
+      const parser = new PDFParse({ data: buffer });
+      const parsed = await parser.getText();
+      await parser.destroy();
       text = parsed.text;
     } else {
       text = buffer.toString('utf-8');
@@ -32,46 +32,44 @@ const uploadPRD = async (req, res) => {
     return res.status(422).json({ error: 'PRD file appears to be empty or corrupted. Please check the file and retry.' });
   }
 
-  // Extract requirements — split by common PRD patterns
-  const requirementPatterns = [
-    /^\d+\.\s+.+/m,  // 1. Requirement
-    /^[-*•]\s+.+/m,  // - Requirement
-    /^#+\s+.+/m,     // ## Section header
-    /^REQ-\d+/m,     // REQ-001 format
-  ];
+  // Upload original file to Cloudinary (non-blocking — null if not configured)
+  let fileUrl = null;
+  try {
+    fileUrl = await uploadFile(buffer, originalname);
+  } catch (err) {
+    console.warn('Cloudinary PRD upload skipped:', err.message);
+  }
 
+  // Extract requirements
+  const requirementPatterns = [/^\d+\.\s+.+/m, /^[-*•]\s+.+/m, /^#+\s+.+/m, /^REQ-\d+/m];
   const lines = text.split('\n').filter((l) => l.trim().length > 10);
-  const requirements = lines
+  let requirements = lines
     .filter((line) => requirementPatterns.some((p) => p.test(line.trim())))
-    .map((text) => ({ text: text.trim(), status: 'not_started', manualOverride: false }))
+    .map((t) => ({ text: t.trim(), status: 'not_started', manualOverride: false }))
     .slice(0, 200);
 
   if (requirements.length === 0) {
-    // Fall back: treat every paragraph as a requirement
     const paragraphs = text.split(/\n{2,}/).filter((p) => p.trim().length > 20);
-    requirements.push(...paragraphs.slice(0, 100).map((text) => ({
-      text: text.trim().slice(0, 500),
+    requirements = paragraphs.slice(0, 100).map((t) => ({
+      text: t.trim().slice(0, 500),
       status: 'not_started',
       manualOverride: false,
-    })));
+    }));
   }
 
   const prd = await PRD.create({
     uploadedBy: req.user.id,
     filename: originalname,
     requirements,
+    fileUrl,
     uploadedAt: new Date(),
   });
 
-  // Chunk and embed asynchronously
+  // Chunk and embed async
   setImmediate(async () => {
     const chunks = chunkFile(`prd/${originalname}`, text);
+    chunks.forEach((c) => { c.requiredRole = 3; });
     await processChunks({ chunks, commitHash: null, sourceType: 'prd' });
-
-    // Also embed each chunk with requiredRole: 3 (PRDs are L3 content)
-    for (const chunk of chunks) {
-      chunk.requiredRole = 3;
-    }
   });
 
   await writeAuditLog({
@@ -83,29 +81,45 @@ const uploadPRD = async (req, res) => {
 
   return res.json({
     prdId: prd._id,
+    filename: prd.filename,
+    fileUrl,
     requirementsCount: requirements.length,
     requirements: requirements.map((r) => ({ text: r.text })),
+    uploadedAt: prd.uploadedAt,
   });
 };
 
 const uploadMockup = async (req, res) => {
-  if (!req.file) {
-    return res.status(400).json({ error: 'No image uploaded' });
-  }
+  if (!req.file) return res.status(400).json({ error: 'No image uploaded' });
 
   const { originalname, buffer, mimetype } = req.file;
 
-  // Create mockup record as "pending" immediately — return fast
+  // Upload image to Cloudinary immediately so we have a URL to show
+  let imageUrl = null;
+  try {
+    imageUrl = await uploadImage(buffer, originalname);
+  } catch (err) {
+    console.warn('Cloudinary mockup upload skipped:', err.message);
+  }
+
   const mockup = await Mockup.create({
     uploadedBy: req.user.id,
     filename: originalname,
+    imageUrl,
     status: 'pending',
     uploadedAt: new Date(),
   });
 
-  res.json({ mockupId: mockup._id, status: 'pending' });
+  // Return immediately with the URL so the frontend can show the thumbnail
+  res.json({
+    mockupId: mockup._id,
+    filename: mockup.filename,
+    imageUrl,
+    status: 'pending',
+    uploadedAt: mockup.uploadedAt,
+  });
 
-  // Async: process with Gemini Vision
+  // Async: Gemini Vision processing
   setImmediate(async () => {
     try {
       const description = await parseMockup(buffer, mimetype);
@@ -113,7 +127,6 @@ const uploadMockup = async (req, res) => {
       mockup.status = 'active';
       await mockup.save();
 
-      // Embed the description and write to KnowledgeChunks
       try {
         const embedding = await embedText(description);
         await KnowledgeChunk.findOneAndUpdate(
@@ -123,7 +136,7 @@ const uploadMockup = async (req, res) => {
             embedding,
             metadata: {
               filepath: `mockup/${originalname}`,
-              requiredRole: 1, // Mockup descriptions are accessible to all devs
+              requiredRole: 1,
               commitHash: null,
               sourceType: 'mockup',
               astNodeType: 'description',
@@ -146,17 +159,20 @@ const uploadMockup = async (req, res) => {
     } catch (err) {
       mockup.status = 'failed';
       await mockup.save();
-
       await writeAuditLog({
         userId: req.user.id,
         action: 'mockup_upload_failed',
         wasBlocked: false,
         metadata: { filename: originalname, error: err.message },
       });
-
-      console.error(`Mockup vision processing failed: ${originalname} — ${err.message}`);
     }
   });
 };
 
-module.exports = { uploadPRD, uploadMockup };
+const getMockupStatus = async (req, res) => {
+  const mockup = await Mockup.findById(req.params.id).select('status description imageUrl filename').lean();
+  if (!mockup) return res.status(404).json({ error: 'Mockup not found' });
+  return res.json(mockup);
+};
+
+module.exports = { uploadPRD, uploadMockup, getMockupStatus };

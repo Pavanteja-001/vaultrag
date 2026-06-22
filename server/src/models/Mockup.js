@@ -14,6 +14,10 @@ const mockupSchema = new mongoose.Schema({
     type: String,
     default: null,
   },
+  imageUrl: {
+    type: String,
+    default: null,
+  },
   status: {
     type: String,
     required: true,

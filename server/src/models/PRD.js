@@ -22,6 +22,7 @@ const prdSchema = new mongoose.Schema({
     required: true,
   },
   requirements: [requirementSchema],
+  fileUrl: { type: String, default: null },
   uploadedAt: {
     type: Date,
     default: Date.now,
