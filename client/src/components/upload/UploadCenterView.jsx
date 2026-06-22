@@ -128,7 +128,25 @@ const UploadCenterView = () => {
       </div>
 
       <UploadQueue items={queue} />
-      <UploadedAssetsGrid prds={uploadedPRDs} mockups={uploadedMockups} />
+      <UploadedAssetsGrid
+        prds={uploadedPRDs}
+        mockups={uploadedMockups}
+        onDeletePRD={async (id) => {
+          try {
+            await axiosClient.delete(`/api/uploads/prds/${id}`);
+            setUploadedPRDs((prev) => prev.filter((p) => p._id !== id));
+            toast.success('PRD deleted');
+          } catch { toast.error('Failed to delete PRD'); }
+        }}
+        onDeleteMockup={async (id) => {
+          try {
+            await axiosClient.delete(`/api/uploads/mockups/${id}`);
+            setUploadedMockups((prev) => prev.filter((m) => m._id !== id));
+            pendingMockupIds.current.delete(id);
+            toast.success('Mockup deleted');
+          } catch { toast.error('Failed to delete mockup'); }
+        }}
+      />
     </div>
   );
 };

@@ -25,9 +25,9 @@ const getScopeStatus = async (req, res) => {
   let commits;
   let lastKnownAt;
   try {
-    commits = await Commit.find({ mergedAt: { $gte: prd.uploadedAt } })
+    commits = await Commit.find()
       .sort({ mergedAt: -1 })
-      .limit(100)
+      .limit(200)
       .lean();
     lastKnownAt = new Date().toISOString();
   } catch {

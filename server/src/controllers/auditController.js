@@ -16,26 +16,15 @@ const getAuditLogs = async (req, res) => {
 
   const skip = (parseInt(page) - 1) * parseInt(limit);
   const total = await AuditLog.countDocuments(filter);
-  const logs = await AuditLog.find(filter)
+  // Fetch ascending for hash chain validation, then reverse for newest-first display
+  const logsAsc = await AuditLog.find(filter)
     .sort({ timestamp: 1 })
     .skip(skip)
     .limit(parseInt(limit))
     .lean();
 
-  // Verify hash chain on read
-  const logsWithValidation = logs.map((log, idx) => {
-    if (idx === 0) {
-      const entryContent = JSON.stringify({
-        userId: log.userId,
-        action: log.action,
-        timestamp: log.timestamp,
-        wasBlocked: log.wasBlocked,
-        metadata: log.metadata,
-      });
-      const expectedHash = computeLogHash(log.prevLogHash, entryContent);
-      return { ...log, hashValid: expectedHash === log.logHash };
-    }
-    const prev = logs[idx - 1];
+  // Verify hash chain integrity in forward order
+  const validated = logsAsc.map((log, idx) => {
     const entryContent = JSON.stringify({
       userId: log.userId,
       action: log.action,
@@ -44,14 +33,17 @@ const getAuditLogs = async (req, res) => {
       metadata: log.metadata,
     });
     const expectedHash = computeLogHash(log.prevLogHash, entryContent);
-    return { ...log, hashValid: expectedHash === log.logHash && log.prevLogHash === prev.logHash };
+    const hashValid = idx === 0
+      ? expectedHash === log.logHash
+      : expectedHash === log.logHash && log.prevLogHash === logsAsc[idx - 1].logHash;
+    return { ...log, hashValid };
   });
 
   return res.json({
     total,
     page: parseInt(page),
     pages: Math.ceil(total / parseInt(limit)),
-    logs: logsWithValidation,
+    logs: validated.reverse(), // newest first for display
   });
 };
 

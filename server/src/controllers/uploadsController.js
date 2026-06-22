@@ -1,7 +1,8 @@
+const path = require('path');
 const { PDFParse } = require('pdf-parse');
 const { embedText } = require('../services/embeddingService');
-const { parseMockup, VisionProcessingError } = require('../services/visionService');
-const { uploadImage, uploadFile } = require('../services/cloudinaryService');
+const { parseMockup } = require('../services/visionService');
+const { uploadImage, uploadFile, getSignedUrl, proxyCloudinaryFile } = require('../services/cloudinaryService');
 const { chunkFile } = require('../services/chunkingService');
 const { processChunks } = require('../workers/embeddingWorker');
 const { writeAuditLog } = require('../utils/auditLogger');
@@ -32,14 +33,6 @@ const uploadPRD = async (req, res) => {
     return res.status(422).json({ error: 'PRD file appears to be empty or corrupted. Please check the file and retry.' });
   }
 
-  // Upload original file to Cloudinary (non-blocking — null if not configured)
-  let fileUrl = null;
-  try {
-    fileUrl = await uploadFile(buffer, originalname);
-  } catch (err) {
-    console.warn('Cloudinary PRD upload skipped:', err.message);
-  }
-
   // Extract requirements
   const requirementPatterns = [/^\d+\.\s+.+/m, /^[-*•]\s+.+/m, /^#+\s+.+/m, /^REQ-\d+/m];
   const lines = text.split('\n').filter((l) => l.trim().length > 10);
@@ -55,6 +48,14 @@ const uploadPRD = async (req, res) => {
       status: 'not_started',
       manualOverride: false,
     }));
+  }
+
+  // Upload to Cloudinary (Vercel-compatible — no local disk)
+  let fileUrl = null;
+  try {
+    fileUrl = await uploadFile(buffer, originalname);
+  } catch (err) {
+    console.warn('Cloudinary PRD upload skipped:', err.message);
   }
 
   const prd = await PRD.create({
@@ -80,7 +81,7 @@ const uploadPRD = async (req, res) => {
   });
 
   return res.json({
-    prdId: prd._id,
+    _id: prd._id,
     filename: prd.filename,
     fileUrl,
     requirementsCount: requirements.length,
@@ -94,7 +95,6 @@ const uploadMockup = async (req, res) => {
 
   const { originalname, buffer, mimetype } = req.file;
 
-  // Upload image to Cloudinary immediately so we have a URL to show
   let imageUrl = null;
   try {
     imageUrl = await uploadImage(buffer, originalname);
@@ -110,7 +110,6 @@ const uploadMockup = async (req, res) => {
     uploadedAt: new Date(),
   });
 
-  // Return immediately with the URL so the frontend can show the thumbnail
   res.json({
     mockupId: mockup._id,
     filename: mockup.filename,
@@ -119,7 +118,6 @@ const uploadMockup = async (req, res) => {
     uploadedAt: mockup.uploadedAt,
   });
 
-  // Async: Gemini Vision processing
   setImmediate(async () => {
     try {
       const description = await parseMockup(buffer, mimetype);
@@ -175,4 +173,47 @@ const getMockupStatus = async (req, res) => {
   return res.json(mockup);
 };
 
-module.exports = { uploadPRD, uploadMockup, getMockupStatus };
+// Serve PDF — proxied through server so JWT auth applies and Cloudinary signed URL handles delivery
+const servePRDFile = async (req, res) => {
+  try {
+    const prd = await PRD.findById(req.params.id).select('filename fileUrl').lean();
+    if (!prd?.fileUrl) return res.status(404).json({ error: 'File not found' });
+    const signedUrl = getSignedUrl(prd.fileUrl, 'raw');
+    await proxyCloudinaryFile(signedUrl, res, 'application/pdf', prd.filename);
+  } catch (err) {
+    console.error('[servePRDFile]', err.message);
+    if (!res.headersSent) res.status(502).json({ error: 'Could not serve file' });
+  }
+};
+
+const serveMockupFile = async (req, res) => {
+  try {
+    const mockup = await Mockup.findById(req.params.id).select('filename imageUrl').lean();
+    if (!mockup?.imageUrl) return res.status(404).json({ error: 'File not found' });
+    const signedUrl = getSignedUrl(mockup.imageUrl, 'image');
+    await proxyCloudinaryFile(signedUrl, res, 'image/jpeg', mockup.filename);
+  } catch (err) {
+    console.error('[serveMockupFile]', err.message);
+    if (!res.headersSent) res.status(502).json({ error: 'Could not serve file' });
+  }
+};
+
+const deletePRD = async (req, res) => {
+  const prd = await PRD.findById(req.params.id).lean();
+  if (!prd) return res.status(404).json({ error: 'PRD not found' });
+  await PRD.findByIdAndDelete(req.params.id);
+  await KnowledgeChunk.deleteMany({ 'metadata.filepath': `prd/${prd.filename}` });
+  await writeAuditLog({ userId: req.user.id, action: 'prd_delete', wasBlocked: false, metadata: { filename: prd.filename } });
+  return res.json({ success: true });
+};
+
+const deleteMockup = async (req, res) => {
+  const mockup = await Mockup.findById(req.params.id).lean();
+  if (!mockup) return res.status(404).json({ error: 'Mockup not found' });
+  await Mockup.findByIdAndDelete(req.params.id);
+  await KnowledgeChunk.deleteMany({ 'metadata.filepath': `mockup/${mockup.filename}` });
+  await writeAuditLog({ userId: req.user.id, action: 'mockup_delete', wasBlocked: false, metadata: { filename: mockup.filename } });
+  return res.json({ success: true });
+};
+
+module.exports = { uploadPRD, uploadMockup, getMockupStatus, deletePRD, deleteMockup, servePRDFile, serveMockupFile };

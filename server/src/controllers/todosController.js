@@ -45,6 +45,13 @@ const updateTodo = async (req, res) => {
   return res.json({ success: true, todo });
 };
 
+const createTodo = async (req, res) => {
+  const { task } = req.body;
+  if (!task?.trim()) return res.status(400).json({ error: 'Task text is required' });
+  const todo = await ToDo.create({ devId: req.user.id, task: task.trim(), status: 'open' });
+  return res.status(201).json(todo);
+};
+
 const createTodos = async (devId, mockupId, tasks) => {
   const docs = tasks.map((task) => ({ devId, mockupId, task, status: 'open' }));
   return await ToDo.insertMany(docs);
@@ -56,4 +63,4 @@ const getAllTodos = async (req, res) => {
   return res.json({ todos });
 };
 
-module.exports = { getTodos, updateTodo, createTodos, getAllTodos };
+module.exports = { getTodos, createTodo, updateTodo, createTodos, getAllTodos };

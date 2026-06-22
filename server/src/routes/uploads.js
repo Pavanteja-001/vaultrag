@@ -3,7 +3,7 @@ const router = express.Router();
 const multer = require('multer');
 const { authenticate } = require('../middleware/auth');
 const { requireRole } = require('../middleware/rbac');
-const { uploadPRD, uploadMockup, getMockupStatus } = require('../controllers/uploadsController');
+const { uploadPRD, uploadMockup, getMockupStatus, deletePRD, deleteMockup, servePRDFile, serveMockupFile } = require('../controllers/uploadsController');
 
 const storage = multer.memoryStorage();
 const upload = multer({
@@ -32,5 +32,9 @@ router.get('/mockups', authenticate, requireRole(1), async (req, res) => {
 });
 
 router.get('/mockups/:id/status', authenticate, requireRole(1), getMockupStatus);
+router.get('/prds/:id/file', authenticate, requireRole(2), servePRDFile);
+router.get('/mockups/:id/file', authenticate, requireRole(1), serveMockupFile);
+router.delete('/prds/:id', authenticate, requireRole(3), deletePRD);
+router.delete('/mockups/:id', authenticate, requireRole(3), deleteMockup);
 
 module.exports = router;

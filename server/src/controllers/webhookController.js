@@ -85,74 +85,93 @@ const handleGithubWebhook = async (req, res) => {
   res.status(200).json({ status: 'received' });
   console.log(`📦 Webhook received — delivery: ${deliveryId}`);
 
-  // Step 4: Process asynchronously
+  // Step 4: Process asynchronously — ALL commits in the push, oldest first
   setImmediate(async () => {
     try {
       const payload = JSON.parse(req.rawBody);
       const commits = payload.commits || [];
-      const headCommit = payload.head_commit || commits[0];
+      if (payload.head_commit && !commits.find((c) => c.id === payload.head_commit.id)) {
+        commits.push(payload.head_commit);
+      }
 
-      if (!headCommit) {
-        console.log('⚠️  Webhook: no head commit found — skipping');
+      if (commits.length === 0) {
+        console.log('⚠️  Webhook: no commits found — skipping');
         return;
       }
 
-      const sha = headCommit.id;
-      const message = headCommit.message;
-      const authorGithubId = headCommit.author?.username || headCommit.author?.name || 'unknown';
-      const filesChanged = [
-        ...(headCommit.added || []),
-        ...(headCommit.modified || []),
-        ...(headCommit.removed || []),
-      ];
-      const mergedAt = new Date(headCommit.timestamp || Date.now());
-
       const repoFullName = payload.repository?.full_name;
+      console.log(`📦 Processing ${commits.length} commit(s) from push`);
 
-      console.log(`🔀 Commit: ${sha.slice(0, 7)} by ${authorGithubId} — "${message}" (${filesChanged.length} files)`);
-
-      // Fetch diff from GitHub API
-      const fileDiffs = repoFullName ? await fetchCommitDiff(repoFullName, sha) : [];
-      if (fileDiffs.length > 0) {
-        console.log(`  📊 Diff fetched: ${fileDiffs.length} file(s) — ${fileDiffs.reduce((a, f) => a + f.additions, 0)}+ ${fileDiffs.reduce((a, f) => a + f.deletions, 0)}-`);
-      }
-
-      // Store commit record with diff
-      await Commit.findOneAndUpdate(
-        { sha },
-        { sha, message, authorGithubId, filesChanged, mergedAt, fileDiffs },
-        { upsert: true }
-      );
-
-      // Chunk changed files — fetch real content from GitHub API
       const allChunks = [];
-      for (const filepath of [...(headCommit.added || []), ...(headCommit.modified || [])]) {
-        let content = null;
-        if (repoFullName) {
-          content = await fetchFileContent(repoFullName, filepath, sha);
+      let lastSha = null;
+
+      for (const commit of commits) {
+        const sha = commit.id;
+        const message = commit.message;
+        const authorGithubId = commit.author?.username || commit.author?.name || 'unknown';
+        const filesChanged = [
+          ...(commit.added || []),
+          ...(commit.modified || []),
+          ...(commit.removed || []),
+        ];
+        const mergedAt = new Date(commit.timestamp || Date.now());
+
+        console.log(`🔀 Commit: ${sha.slice(0, 7)} by ${authorGithubId} — "${message}" (${filesChanged.length} files)`);
+
+        // Fetch diff from GitHub API
+        const fileDiffs = repoFullName ? await fetchCommitDiff(repoFullName, sha) : [];
+        if (fileDiffs.length > 0) {
+          console.log(`  📊 Diff: ${fileDiffs.length} file(s) — ${fileDiffs.reduce((a, f) => a + f.additions, 0)}+ ${fileDiffs.reduce((a, f) => a + f.deletions, 0)}-`);
         }
-        if (!content) {
-          // Fallback to metadata-only if GitHub API unavailable
-          content = `// File: ${filepath}\n// Commit: ${sha}\n// Author: ${authorGithubId}`;
+
+        // Store commit record
+        await Commit.findOneAndUpdate(
+          { sha },
+          { sha, message, authorGithubId, filesChanged, mergedAt, fileDiffs },
+          { upsert: true }
+        );
+
+        // Chunk all added/modified files
+        for (const filepath of [...(commit.added || []), ...(commit.modified || [])]) {
+          let content = null;
+          if (repoFullName) {
+            content = await fetchFileContent(repoFullName, filepath, sha);
+          }
+          if (!content) {
+            content = `// File: ${filepath}\n// Commit: ${sha}\n// Author: ${authorGithubId}`;
+          }
+          const chunks = chunkFile(filepath, content).map((c) => ({ ...c, _commitHash: sha }));
+          console.log(`  📄 ${filepath} → ${chunks.length} chunk(s)`);
+          allChunks.push(...chunks);
         }
-        const chunks = chunkFile(filepath, content);
-        console.log(`  📄 ${filepath} → ${chunks.length} chunk(s) (${content.length} bytes)`);
-        allChunks.push(...chunks);
+
+        lastSha = sha;
       }
 
       if (allChunks.length > 0) {
-        console.log(`🧠 Embedding ${allChunks.length} chunk(s)...`);
-        const result = await processChunks({ chunks: allChunks, commitHash: sha, sourceType: 'code' });
-        console.log(`✅ Webhook processed: ${result.total} chunks, ${result.failed} failed`);
+        console.log(`🧠 Embedding ${allChunks.length} total chunk(s)...`);
+        // Group chunks by their commit hash for proper metadata
+        const chunksByCommit = allChunks.reduce((acc, c) => {
+          const hash = c._commitHash;
+          if (!acc[hash]) acc[hash] = [];
+          acc[hash].push(c);
+          return acc;
+        }, {});
+        let totalFailed = 0;
+        for (const [hash, chunks] of Object.entries(chunksByCommit)) {
+          const result = await processChunks({ chunks, commitHash: hash, sourceType: 'code' });
+          totalFailed += result.failed;
+        }
+        console.log(`✅ Push processed: ${allChunks.length} chunks, ${totalFailed} failed`);
       } else {
-        console.log('⚠️  Webhook: 0 chunks to embed (no added/modified files in payload)');
+        console.log('⚠️  Webhook: 0 chunks to embed');
       }
 
       await writeAuditLog({
         userId: null,
         action: 'webhook_processed',
         wasBlocked: false,
-        metadata: { sha, filesChanged: filesChanged.length },
+        metadata: { commits: commits.length, chunks: allChunks.length },
       });
     } catch (err) {
       console.error('❌ Webhook processing error:', err.message);
