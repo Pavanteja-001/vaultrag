@@ -14,6 +14,7 @@ import InsightsView from './components/insights/InsightsView';
 import ToDoBoardView from './components/todos/ToDoBoardView';
 import AuditLogView from './components/audit/AuditLogView';
 import RoleManagementView from './components/admin/RoleManagementView';
+import ShowcaseView from './components/showcase/ShowcaseView';
 
 // Loading skeleton shown while checking auth session
 const AuthLoading = () => (
@@ -40,6 +41,7 @@ const AppRoutes = () => {
 
   return (
     <Routes>
+      <Route path="/showcase" element={<ShowcaseView />} />
       <Route path="/login" element={user ? <Navigate to="/chat" replace /> : <LoginView />} />
 
       <Route path="/chat" element={

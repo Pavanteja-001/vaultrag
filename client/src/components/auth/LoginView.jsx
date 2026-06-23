@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 import { useAuth } from '../../context/AuthContext';
 import EmailPasswordForm from './EmailPasswordForm';
+import DocumentationView from './DocumentationView';
 
 const ParticleBackground = () => (
   <div className="absolute inset-0 overflow-hidden pointer-events-none">
@@ -36,6 +37,7 @@ const LoginView = () => {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [showDocs, setShowDocs] = useState(false);
 
   const handleLogin = async ({ email, password }) => {
     setLoading(true);
@@ -69,6 +71,22 @@ const LoginView = () => {
 
           <EmailPasswordForm onSubmit={handleLogin} loading={loading} error={error} />
 
+          <div className="mt-4 flex items-center justify-center gap-4">
+            {/* <button
+              onClick={() => setShowDocs(true)}
+              className="text-xs text-neon-blue hover:text-neon-blue/80 underline cursor-pointer transition-colors duration-200"
+            >
+              Documentation & Walkthrough
+            </button> */}
+            <span className="text-gray-700 text-xs">·</span>
+            <a
+              href="/showcase"
+              className="text-xs text-neon-blue hover:text-neon-blue/80 underline transition-colors duration-200"
+            >
+              See how it works →
+            </a>
+          </div>
+
           <div className="mt-6 text-center">
             <p className="text-xs text-gray-600">
               Role-based access · All queries are audited · Secured with RBAC
@@ -76,6 +94,12 @@ const LoginView = () => {
           </div>
         </div>
       </motion.div>
+
+      <AnimatePresence>
+        {showDocs && (
+          <DocumentationView onClose={() => setShowDocs(false)} />
+        )}
+      </AnimatePresence>
     </div>
   );
 };
