@@ -6,8 +6,8 @@
 
 **Role-filtered · Injection-protected · Source-cited · Real-time indexed**
 
-[![Live Demo](https://img.shields.io/badge/Live%20Demo-Vercel-black?style=for-the-badge&logo=vercel)](https://vaultrag-hfw757m2a-pavantejagurajapu59-gmailcoms-projects.vercel.app)
-[![Showcase](https://img.shields.io/badge/Showcase-View%20Features-blue?style=for-the-badge)](https://vaultrag-hfw757m2a-pavantejagurajapu59-gmailcoms-projects.vercel.app/showcase)
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-Vercel-black?style=for-the-badge&logo=vercel)](https://vaultrag-ivory.vercel.app)
+[![Showcase](https://img.shields.io/badge/Showcase-View%20Features-blue?style=for-the-badge)](https://vaultrag-ivory.vercel.app/showcase)
 [![MongoDB](https://img.shields.io/badge/Database-MongoDB%20Atlas-green?style=for-the-badge&logo=mongodb)](https://cloud.mongodb.com)
 
 </div>
@@ -458,6 +458,6 @@ MIT
 
 **Node.js · MongoDB Atlas · Groq · Gemini · React · Vite · Cloudinary**
 
-[Live Demo](https://vaultrag-hfw757m2a-pavantejagurajapu59-gmailcoms-projects.vercel.app) · [Feature Showcase](https://vaultrag-hfw757m2a-pavantejagurajapu59-gmailcoms-projects.vercel.app/showcase)
+[Live Demo](https://vaultrag-ivory.vercel.app) · [Feature Showcase](https://vaultrag-ivory.vercel.app/showcase)
 
 </div>
