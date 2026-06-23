@@ -1,8 +1,9 @@
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 
-// Flash tier only — Pro is paid-only as of April 2026
-const VISION_MODEL = 'gemini-2.5-flash';
-const TIMEOUT_MS = 30000;
+// Model chain: 2.5-flash primary, 2.0-flash fallback. Both support vision on v1beta.
+// 1.5-flash is NOT supported on v1beta (this SDK version) so excluded.
+const VISION_MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash'];
+const TIMEOUT_MS = 50000;
 
 class VisionProcessingError extends Error {
   constructor(message) {
@@ -24,9 +25,10 @@ const getGenAI = () => {
  * imageBuffer: Buffer, mimeType: 'image/jpeg' | 'image/png' | 'image/webp'
  * Throws VisionProcessingError on timeout or failure — caller marks mockup as "pending".
  */
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
 const parseMockup = async (imageBuffer, mimeType = 'image/png') => {
   const ai = getGenAI();
-  const model = ai.getGenerativeModel({ model: VISION_MODEL });
 
   const imageData = {
     inlineData: {
@@ -48,24 +50,38 @@ Include:
 
 Format as a structured description that a developer can use to implement this UI.`;
 
-  const timeoutPromise = new Promise((_, reject) =>
-    setTimeout(() => reject(new VisionProcessingError('Vision API timeout')), TIMEOUT_MS)
-  );
-
-  try {
-    const result = await Promise.race([
-      model.generateContent([prompt, imageData]),
-      timeoutPromise,
-    ]);
-    const text = result.response.text();
-    if (!text || text.trim().length < 10) {
-      throw new VisionProcessingError('Empty or invalid vision response');
+  let lastErr;
+  for (const modelName of VISION_MODELS) {
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const model = ai.getGenerativeModel({ model: modelName });
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new VisionProcessingError('Vision API timeout')), TIMEOUT_MS)
+        );
+        const result = await Promise.race([
+          model.generateContent([prompt, imageData]),
+          timeoutPromise,
+        ]);
+        const text = result.response.text();
+        if (!text || text.trim().length < 10) throw new VisionProcessingError('Empty or invalid vision response');
+        console.log(`[Vision] success with ${modelName} attempt ${attempt}`);
+        return text;
+      } catch (err) {
+        lastErr = err;
+        const isRetryable = err.message?.includes('503') || err.message?.includes('overloaded') ||
+          err.message?.includes('high demand') || err.message?.includes('429') ||
+          err.message?.includes('quota') || (err instanceof VisionProcessingError && err.message === 'Vision API timeout');
+        console.warn(`[Vision] ${modelName} attempt ${attempt} failed: ${err.message?.slice(0, 120)}`);
+        if (isRetryable && attempt === 1) {
+          await sleep(5000); // wait 5s before retry / next model
+          continue;
+        }
+        break; // non-retryable or second attempt — try next model
+      }
     }
-    return text;
-  } catch (err) {
-    if (err instanceof VisionProcessingError) throw err;
-    throw new VisionProcessingError(err.message);
   }
+
+  throw new VisionProcessingError(lastErr?.message || 'All vision models failed');
 };
 
 module.exports = { parseMockup, VisionProcessingError };

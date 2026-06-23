@@ -44,14 +44,13 @@ const PROJECT_STATUS_KEYWORDS = ['project completion', 'project status', 'percen
 const isProjectStatusQuery = (q) => PROJECT_STATUS_KEYWORDS.some((kw) => q.toLowerCase().includes(kw));
 
 // Detect implementation-check queries — "does X work?", "is X implemented?", "does creating X deduct Y?"
-// These need actual controller code injected — PRD alone is never enough
 const IMPL_CHECK_PATTERNS = [
   /does .{1,40} (deduct|check|send|validate|update|notify|log|auto|trigger|generate)/i,
   /is .{1,40} (implemented|working|built|done|complete)/i,
   /can you .{1,40} (discontinued|deleted|deactivated|blocked)/i,
   /\b(does|do|is|are|has|have|will)\b.{1,60}\b(work|implement|deduct|check|enforce|reject|allow|prevent|restrict)\b/i,
   /what happens when .{1,60}(called|triggered|invoked|created|updated|deleted)/i,
-  /show me the .{1,30}(controller|service|middleware|handler)/i,
+  /\b(show|get|view|read|print|display|give|tell)\b.{0,40}\b(controllers?|services?|middlewares?|middelwares?|handlers?|routes?|apis?|db|config|credentials?|secrets?|endpoints?|files?)/i,
 ];
 const isImplementationQuery = (q) => IMPL_CHECK_PATTERNS.some((p) => p.test(q));
 
@@ -352,7 +351,7 @@ ${backendLines.join('\n')}
   // Generate answer — retry once with backoff internally, then return graceful fallback
   let answer;
   try {
-    answer = await generateAnswer(context, question);
+    answer = await generateAnswer(context, question, userRole);
   } catch (genErr) {
     const isRateLimit = genErr?.status === 429 || genErr?.message?.includes('429') || genErr?.message?.includes('rate');
     await writeAuditLog({ userId, action: 'query_generation_failed', wasBlocked: false, metadata: { error: genErr?.message } });

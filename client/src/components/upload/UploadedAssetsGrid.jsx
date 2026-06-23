@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
 import { motion } from 'framer-motion';
-import { FileText, Image, CheckCircle, Clock, XCircle, Trash2, Eye } from 'lucide-react';
+import { FileText, Image, CheckCircle, Clock, XCircle, Trash2, Eye, RefreshCw } from 'lucide-react';
 import FileViewerModal from './FileViewerModal';
+import axiosClient from '../../api/axiosClient';
+import toast from 'react-hot-toast';
 
 const StatusBadge = ({ status }) => {
   if (status === 'active') return <CheckCircle className="w-3.5 h-3.5 text-neon-green" />;
@@ -10,8 +12,33 @@ const StatusBadge = ({ status }) => {
   return null;
 };
 
-const UploadedAssetsGrid = ({ prds = [], mockups = [], onDeletePRD, onDeleteMockup }) => {
+const UploadedAssetsGrid = ({ prds = [], mockups = [], onDeletePRD, onDeleteMockup, onMockupStatusChange }) => {
   const [viewing, setViewing] = useState(null);
+  const [retrying, setRetrying] = useState({});
+
+  const handleReanalyze = async (e, mockupId) => {
+    e.stopPropagation();
+    setRetrying((prev) => ({ ...prev, [mockupId]: true }));
+    try {
+      await axiosClient.post(`/api/uploads/mockups/${mockupId}/reanalyze`);
+      toast.success('Re-analysis started — polling for result...');
+      onMockupStatusChange?.(mockupId, 'pending');
+      // Poll until done
+      const poll = setInterval(async () => {
+        const res = await axiosClient.get(`/api/uploads/mockups/${mockupId}/status`);
+        if (res.data.status !== 'pending') {
+          clearInterval(poll);
+          setRetrying((prev) => ({ ...prev, [mockupId]: false }));
+          onMockupStatusChange?.(mockupId, res.data.status);
+          if (res.data.status === 'active') toast.success(`Mockup analyzed: ${res.data.filename}`);
+          else toast.error(`Re-analysis failed: ${res.data.filename}`);
+        }
+      }, 4000);
+    } catch {
+      setRetrying((prev) => ({ ...prev, [mockupId]: false }));
+      toast.error('Could not start re-analysis');
+    }
+  };
 
   if (!prds.length && !mockups.length) return null;
 
@@ -96,14 +123,26 @@ const UploadedAssetsGrid = ({ prds = [], mockups = [], onDeletePRD, onDeleteMock
                       <p className="text-xs text-white truncate">{mockup.filename}</p>
                       <p className="text-[10px] text-gray-500 capitalize mt-0.5">{mockup.status}</p>
                     </div>
-                    {onDeleteMockup && (
-                      <button
-                        onClick={(e) => { e.stopPropagation(); onDeleteMockup(mockup._id); }}
-                        className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-neon-red/10 text-gray-600 hover:text-neon-red transition-all flex-shrink-0"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    )}
+                    <div className="flex items-center gap-1 flex-shrink-0">
+                      {mockup.status === 'failed' && (
+                        <button
+                          onClick={(e) => handleReanalyze(e, mockup._id)}
+                          disabled={retrying[mockup._id]}
+                          title="Retry analysis"
+                          className="p-1 rounded hover:bg-neon-blue/10 text-neon-blue transition-all opacity-0 group-hover:opacity-100"
+                        >
+                          <RefreshCw className={`w-3.5 h-3.5 ${retrying[mockup._id] ? 'animate-spin' : ''}`} />
+                        </button>
+                      )}
+                      {onDeleteMockup && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); onDeleteMockup(mockup._id); }}
+                          className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-neon-red/10 text-gray-600 hover:text-neon-red transition-all"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </motion.div>
               ))}

@@ -173,6 +173,54 @@ const getMockupStatus = async (req, res) => {
   return res.json(mockup);
 };
 
+// Re-analyze a failed mockup by fetching its image from Cloudinary and retrying
+const reanalyzeMockup = async (req, res) => {
+  const mockup = await Mockup.findById(req.params.id);
+  if (!mockup) return res.status(404).json({ error: 'Mockup not found' });
+  if (mockup.status === 'active') return res.json({ message: 'Already analyzed', status: 'active' });
+
+  mockup.status = 'pending';
+  await mockup.save();
+  res.json({ message: 'Re-analysis started', status: 'pending' });
+
+  setImmediate(async () => {
+    try {
+      // Fetch image bytes from Cloudinary via signed URL
+      const https = require('https');
+      const { getSignedUrl } = require('../services/cloudinaryService');
+      const signedUrl = getSignedUrl(mockup.imageUrl, 'image');
+      const buffer = await new Promise((resolve, reject) => {
+        https.get(signedUrl, (r) => {
+          const chunks = [];
+          r.on('data', (c) => chunks.push(c));
+          r.on('end', () => resolve(Buffer.concat(chunks)));
+          r.on('error', reject);
+        }).on('error', reject);
+      });
+
+      const description = await parseMockup(buffer, 'image/png');
+      mockup.description = description;
+      mockup.status = 'active';
+      await mockup.save();
+
+      const embedding = await embedText(description);
+      await KnowledgeChunk.findOneAndUpdate(
+        { 'metadata.filepath': `mockup/${mockup.filename}`, 'metadata.astNodeType': 'description' },
+        {
+          content: description, embedding,
+          metadata: { filepath: `mockup/${mockup.filename}`, requiredRole: 1, commitHash: null, sourceType: 'mockup', astNodeType: 'description', version: null, status: 'active' },
+        },
+        { upsert: true }
+      );
+      await writeAuditLog({ userId: req.user.id, action: 'mockup_reanalyze_success', wasBlocked: false, metadata: { filename: mockup.filename } });
+    } catch (err) {
+      mockup.status = 'failed';
+      await mockup.save();
+      console.error('[reanalyzeMockup] failed:', err.message);
+    }
+  });
+};
+
 // Serve PDF — proxied through server so JWT auth applies and Cloudinary signed URL handles delivery
 const servePRDFile = async (req, res) => {
   try {
@@ -216,4 +264,4 @@ const deleteMockup = async (req, res) => {
   return res.json({ success: true });
 };
 
-module.exports = { uploadPRD, uploadMockup, getMockupStatus, deletePRD, deleteMockup, servePRDFile, serveMockupFile };
+module.exports = { uploadPRD, uploadMockup, getMockupStatus, reanalyzeMockup, deletePRD, deleteMockup, servePRDFile, serveMockupFile };
