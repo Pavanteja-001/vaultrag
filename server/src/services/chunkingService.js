@@ -1,5 +1,26 @@
 const path = require('path');
 
+// Files that must NEVER be indexed regardless of role — contain real secrets
+const SKIP_FILE_PATTERNS = [
+  /^\.env(\.|$)/i,           // .env, .env.local, .env.production, .env.test
+  /\/\.env(\.|$)/i,          // nested .env files
+  /\.pem$/i,                 // SSL certs
+  /\.key$/i,                 // private keys
+  /\.p12$/i,                 // PKCS12 keystores
+  /id_rsa/i,                 // SSH private keys
+  /id_ed25519/i,             // SSH ed25519 keys
+  /\.npmrc$/i,               // npm auth tokens
+  /\.netrc$/i,               // credentials file
+  /credentials\.json$/i,    // OAuth client secrets
+  /service[_-]?account\.json$/i, // GCP service accounts
+];
+
+const shouldSkipFile = (filepath) => {
+  const normalized = filepath.replace(/\\/g, '/');
+  const basename = normalized.split('/').pop();
+  return SKIP_FILE_PATTERNS.some((p) => p.test(basename) || p.test(normalized));
+};
+
 const DEFAULT_ROLE_RULES = [
   // Role 3 (most restricted) — checked first
   { pattern: /src\/config\//i, role: 3 },
@@ -149,6 +170,11 @@ const chunkCSS = (content, filepath) => {
 };
 
 const chunkFile = (filepath, content) => {
+  if (shouldSkipFile(filepath)) {
+    console.log(`🔒 SKIP (secrets): ${filepath}`);
+    return [];
+  }
+
   const ext = path.extname(filepath).toLowerCase();
   let rawChunks;
 
@@ -168,4 +194,4 @@ const chunkFile = (filepath, content) => {
   }));
 };
 
-module.exports = { chunkFile, inferRequiredRole };
+module.exports = { chunkFile, inferRequiredRole, shouldSkipFile };

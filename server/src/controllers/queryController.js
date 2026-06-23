@@ -43,6 +43,18 @@ const isUIQuery = (q) => UI_KEYWORDS.some((kw) => q.toLowerCase().includes(kw));
 const PROJECT_STATUS_KEYWORDS = ['project completion', 'project status', 'percent of', 'percentage of', 'how much done', 'whole project', 'entire project', 'overall completion', 'frontend and backend', 'backend and frontend', 'project progress', 'what is done', 'what\'s done', 'completion status'];
 const isProjectStatusQuery = (q) => PROJECT_STATUS_KEYWORDS.some((kw) => q.toLowerCase().includes(kw));
 
+// Detect implementation-check queries — "does X work?", "is X implemented?", "does creating X deduct Y?"
+// These need actual controller code injected — PRD alone is never enough
+const IMPL_CHECK_PATTERNS = [
+  /does .{1,40} (deduct|check|send|validate|update|notify|log|auto|trigger|generate)/i,
+  /is .{1,40} (implemented|working|built|done|complete)/i,
+  /can you .{1,40} (discontinued|deleted|deactivated|blocked)/i,
+  /\b(does|do|is|are|has|have|will)\b.{1,60}\b(work|implement|deduct|check|enforce|reject|allow|prevent|restrict)\b/i,
+  /what happens when .{1,60}(called|triggered|invoked|created|updated|deleted)/i,
+  /show me the .{1,30}(controller|service|middleware|handler)/i,
+];
+const isImplementationQuery = (q) => IMPL_CHECK_PATTERNS.some((p) => p.test(q));
+
 const handleQuery = async (req, res) => {
   const { question, conversationId } = req.body;
   if (!question || !question.trim()) {
@@ -51,6 +63,8 @@ const handleQuery = async (req, res) => {
 
   const userId = req.user.id;
   const userRole = req.user.role;
+  console.log(`[RBAC] query userId=${userId} role=${userRole} q="${question.slice(0, 60)}"`);
+
 
   // Check Groq budget
   try {
@@ -101,8 +115,8 @@ const handleQuery = async (req, res) => {
   }
 
   // Vector search with RBAC filter inside the query
-  // UI queries get higher limit so mockups don't get squeezed out by code chunks
-  const searchLimit = isUIQuery(question) ? 12 : 5;
+  // UI / implementation queries get higher limit so docs don't squeeze out code chunks
+  const searchLimit = (isUIQuery(question) || isImplementationQuery(question)) ? 12 : 5;
   let sources;
   try {
     sources = await searchChunks(queryEmbedding, userRole, searchLimit);
@@ -230,6 +244,41 @@ ${backendLines.join('\n')}
     } catch { /* non-fatal */ }
   }
 
+  // For implementation-check queries: inject ALL controller+service chunks so the LLM
+  // sees actual code, not just PRD requirements. PRD alone must never answer these.
+  let implQueryHadNoControllerAccess = false;
+  if (isImplementationQuery(question)) {
+    try {
+      const codeChunks = await KnowledgeChunk.find({
+        'metadata.status': 'active',
+        'metadata.requiredRole': { $lte: userRole },
+        'metadata.sourceType': 'code',
+        'metadata.filepath': { $regex: /(controller|service|middleware)/i },
+      }).select('content metadata').lean();
+
+      if (codeChunks.length === 0) {
+        // RBAC blocked all controller chunks — flag so we can warn the LLM
+        implQueryHadNoControllerAccess = true;
+      } else {
+        const existingIds = new Set(sources.map((s) => s.id));
+        for (const cc of codeChunks) {
+          if (!existingIds.has(cc._id.toString())) {
+            sources.push({
+              id: cc._id.toString(),
+              content: cc.content,
+              filepath: cc.metadata.filepath,
+              sourceType: cc.metadata.sourceType,
+              astNodeType: cc.metadata.astNodeType,
+              commitHash: cc.metadata.commitHash,
+              score: 0,
+            });
+            existingIds.add(cc._id.toString());
+          }
+        }
+      }
+    } catch { /* non-fatal */ }
+  }
+
   if (!sources || sources.length === 0) {
     await writeAuditLog({ userId, action: 'query_no_results', wasBlocked: false });
     return res.json({ answer: 'No relevant content found in the knowledge base for your query.', sources: [] });
@@ -288,7 +337,17 @@ ${backendLines.join('\n')}
     totalChars += part.length;
   }
 
-  const context = uiInventoryHeader + recentCommitHeader + contextParts.join('\n\n---\n\n');
+  // If user asked about controller code but RBAC blocked all of it, prepend a hard warning
+  // so the LLM cannot hallucinate code it doesn't have access to
+  const rbacBlockWarning = implQueryHadNoControllerAccess
+    ? `// ⚠ RBAC ACCESS BLOCK: This user does NOT have access to backend controller, service, or middleware code.
+// Backend implementation code is restricted to higher access levels.
+// You MUST answer: "I don't have access to the backend controller code at your permission level."
+// Do NOT generate, invent, guess, or roleplay any controller or service code.
+// Do NOT use the "// File: ... | Last commit: ..." format in your answer — that is reserved for actual retrieved code only.\n\n`
+    : '';
+
+  const context = rbacBlockWarning + uiInventoryHeader + recentCommitHeader + contextParts.join('\n\n---\n\n');
 
   // Generate answer — retry once with backoff internally, then return graceful fallback
   let answer;
